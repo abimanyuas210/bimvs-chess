@@ -171,7 +171,7 @@
                 <div class="stat-value" id="draws">0</div>
             </div>
             <div class="stat-box">
-                <div class="stat-label">Current Match Time</div>
+                <div class="stat-label">Current Match</div>
                 <div class="stat-value" id="matchTime">0s</div>
             </div>
             <div class="stat-box">
@@ -183,7 +183,7 @@
 
     <script>
         // ============================================
-        // CHESS ENGINE - Full Implementation
+        // CHESS ENGINE
         // ============================================
         
         class ChessEngine {
@@ -191,10 +191,8 @@
                 this.board = this.createInitialBoard();
                 this.currentPlayer = 'white';
                 this.moveHistory = [];
-                this.capturedPieces = [];
                 this.halfMoveClock = 0;
                 this.fullMoveNumber = 1;
-                this.positionHistory = new Map();
             }
             
             createInitialBoard() {
@@ -258,18 +256,15 @@
                 const direction = color === 'white' ? -1 : 1;
                 const startRow = color === 'white' ? 6 : 1;
                 
-                // Forward move
                 if (this.isValidSquare(row + direction, col) && 
                     this.board[row + direction][col] === ' ') {
                     moves.push({from: [row, col], to: [row + direction, col]});
                     
-                    // Double move from start
                     if (row === startRow && this.board[row + 2*direction][col] === ' ') {
                         moves.push({from: [row, col], to: [row + 2*direction, col]});
                     }
                 }
                 
-                // Captures
                 for (let dc of [-1, 1]) {
                     const newRow = row + direction;
                     const newCol = col + dc;
@@ -396,7 +391,7 @@
                     for (let col = 0; col < 8; col++) {
                         const piece = this.board[row][col];
                         if (this.getPieceColor(piece) === opponentColor) {
-                            const moves = this.getPieceMovesWithoutCheckValidation(row, col);
+                            const moves = this.getRawMoves(row, col);
                             for (let move of moves) {
                                 if (move.to[0] === kingPos[0] && move.to[1] === kingPos[1]) {
                                     return true;
@@ -409,9 +404,11 @@
                 return false;
             }
             
-            getPieceMovesWithoutCheckValidation(row, col) {
+            getRawMoves(row, col) {
                 const piece = this.board[row][col].toLowerCase();
                 const color = this.getPieceColor(this.board[row][col]);
+                
+                if (!color) return [];
                 
                 switch(piece) {
                     case 'p': return this.getPawnMoves(row, col, color);
@@ -434,7 +431,6 @@
                 this.board[toRow][toCol] = movingPiece;
                 this.board[fromRow][fromCol] = ' ';
                 
-                // Pawn promotion
                 if (movingPiece.toLowerCase() === 'p' && (toRow === 0 || toRow === 7)) {
                     this.board[toRow][toCol] = this.currentPlayer === 'white' ? 'Q' : 'q';
                 }
@@ -457,14 +453,7 @@
                 
                 this.currentPlayer = this.currentPlayer === 'white' ? 'black' : 'white';
                 
-                const posKey = this.getPositionKey();
-                this.positionHistory.set(posKey, (this.positionHistory.get(posKey) || 0) + 1);
-                
                 return true;
-            }
-            
-            getPositionKey() {
-                return this.board.map(row => row.join('')).join('|') + '|' + this.currentPlayer;
             }
             
             isCheckmate() {
@@ -478,15 +467,8 @@
             }
             
             isDraw() {
-                // 50-move rule
                 if (this.halfMoveClock >= 100) return true;
                 
-                // Threefold repetition
-                for (let count of this.positionHistory.values()) {
-                    if (count >= 3) return true;
-                }
-                
-                // Insufficient material
                 const pieces = [];
                 for (let row of this.board) {
                     for (let piece of row) {
@@ -518,7 +500,7 @@
         }
         
         // ============================================
-        // AI ENGINE - Minimax with Learning
+        // AI ENGINE with Learning
         // ============================================
         
         class ChessAI {
@@ -528,11 +510,14 @@
                 this.searchDepth = 3;
             }
             
-            // Load learned heuristics from localStorage
             loadHeuristics() {
-                const saved = localStorage.getItem(`heuristics_${this.color}`);
-                if (saved) {
-                    return JSON.parse(saved);
+                try {
+                    const saved = localStorage.getItem(`heuristics_${this.color}`);
+                    if (saved) {
+                        return JSON.parse(saved);
+                    }
+                } catch (e) {
+                    console.error('Error loading heuristics:', e);
                 }
                 
                 return {
@@ -541,13 +526,459 @@
                     },
                     positionBonus: 10,
                     mobilityWeight: 5,
-                    centerControl: 15,
-                    pawnStructure: 20,
-                    kingSafety: 30,
                     aggressionFactor: 1.0,
                     resignThreshold: -1500
                 };
             }
             
-            // Save learned heuristics to localStorage
-  
+            saveHeuristics() {
+                try {
+                    localStorage.setItem(`heuristics_${this.color}`, JSON.stringify(this.heuristics));
+                } catch (e) {
+                    console.error('Error saving heuristics:', e);
+                }
+            }
+            
+            updateFromGameResult(result) {
+                if (result === this.color) {
+                    this.heuristics.aggressionFactor *= 1.01;
+                    this.heuristics.mobilityWeight += 0.3;
+                } else if (result !== 'draw' && result !== 'resign') {
+                    this.heuristics.aggressionFactor *= 0.99;
+                }
+                
+                if (result === 'resign') {
+                    this.heuristics.resignThreshold -= 30;
+                }
+                
+                this.saveHeuristics();
+            }
+            
+            evaluatePosition(engine) {
+                let score = 0;
+                
+                for (let row = 0; row < 8; row++) {
+                    for (let col = 0; col < 8; col++) {
+                        const piece = engine.board[row][col];
+                        if (piece === ' ') continue;
+                        
+                        const pieceColor = engine.getPieceColor(piece);
+                        const pieceValue = this.heuristics.pieceValues[piece.toLowerCase()];
+                        const multiplier = pieceColor === this.color ? 1 : -1;
+                        
+                        score += pieceValue * multiplier;
+                        
+                        const centerDistance = Math.abs(3.5 - row) + Math.abs(3.5 - col);
+                        score += (7 - centerDistance) * this.heuristics.positionBonus * multiplier;
+                    }
+                }
+                
+                const myMoves = engine.getAllMoves(this.color).length;
+                const opponentColor = this.color === 'white' ? 'black' : 'white';
+                const opponentMoves = engine.getAllMoves(opponentColor).length;
+                score += (myMoves - opponentMoves) * this.heuristics.mobilityWeight;
+                
+                if (engine.isInCheck(this.color)) {
+                    score -= 50;
+                } else if (engine.isInCheck(opponentColor)) {
+                    score += 50;
+                }
+                
+                return score * this.heuristics.aggressionFactor;
+            }
+            
+            minimax(engine, depth, alpha, beta, maximizingPlayer) {
+                if (depth === 0 || engine.isGameOver()) {
+                    return this.evaluatePosition(engine);
+                }
+                
+                const moves = engine.getAllMoves(engine.currentPlayer);
+                
+                if (moves.length === 0) {
+                    if (engine.isInCheck(engine.currentPlayer)) {
+                        return maximizingPlayer ? -99999 : 99999;
+                    }
+                    return 0;
+                }
+                
+                if (maximizingPlayer) {
+                    let maxEval = -Infinity;
+                    for (let move of moves) {
+                        const saveState = this.saveEngineState(engine);
+                        engine.makeMove(move);
+                        const evaluation = this.minimax(engine, depth - 1, alpha, beta, false);
+                        this.restoreEngineState(engine, saveState);
+                        
+                        maxEval = Math.max(maxEval, evaluation);
+                        alpha = Math.max(alpha, evaluation);
+                        if (beta <= alpha) break;
+                    }
+                    return maxEval;
+                } else {
+                    let minEval = Infinity;
+                    for (let move of moves) {
+                        const saveState = this.saveEngineState(engine);
+                        engine.makeMove(move);
+                        const evaluation = this.minimax(engine, depth - 1, alpha, beta, true);
+                        this.restoreEngineState(engine, saveState);
+                        
+                        minEval = Math.min(minEval, evaluation);
+                        beta = Math.min(beta, evaluation);
+                        if (beta <= alpha) break;
+                    }
+                    return minEval;
+                }
+            }
+            
+            saveEngineState(engine) {
+                return {
+                    board: engine.board.map(row => [...row]),
+                    currentPlayer: engine.currentPlayer,
+                    moveHistory: [...engine.moveHistory],
+                    halfMoveClock: engine.halfMoveClock,
+                    fullMoveNumber: engine.fullMoveNumber
+                };
+            }
+            
+            restoreEngineState(engine, state) {
+                engine.board = state.board;
+                engine.currentPlayer = state.currentPlayer;
+                engine.moveHistory = state.moveHistory;
+                engine.halfMoveClock = state.halfMoveClock;
+                engine.fullMoveNumber = state.fullMoveNumber;
+            }
+            
+            getBestMove(engine) {
+                const moves = engine.getAllMoves(this.color);
+                
+                if (moves.length === 0) return null;
+                
+                const currentEval = this.evaluatePosition(engine);
+                if (currentEval < this.heuristics.resignThreshold) {
+                    return 'resign';
+                }
+                
+                let bestMove = null;
+                let bestValue = -Infinity;
+                
+                for (let move of moves) {
+                    const saveState = this.saveEngineState(engine);
+                    engine.makeMove(move);
+                    const moveValue = this.minimax(engine, this.searchDepth - 1, -Infinity, Infinity, false);
+                    this.restoreEngineState(engine, saveState);
+                    
+                    if (moveValue > bestValue) {
+                        bestValue = moveValue;
+                        bestMove = move;
+                    }
+                }
+                
+                return bestMove;
+            }
+        }
+        
+        // ============================================
+        // GAME CONTROLLER & UI
+        // ============================================
+        
+        class GameController {
+            constructor() {
+                this.engine = new ChessEngine();
+                this.whiteAI = new ChessAI('white');
+                this.blackAI = new ChessAI('black');
+                this.stats = this.loadStats();
+                this.matchStartTime = Date.now();
+                this.totalStartTime = this.stats.totalStartTime || Date.now();
+                this.lastMove = null;
+                this.lastMoveTime = 0;
+                
+                this.initBoard();
+                this.updateUI();
+                this.startGame();
+            }
+            
+            loadStats() {
+                try {
+                    const saved = localStorage.getItem('chessStats');
+                    if (saved) {
+                        return JSON.parse(saved);
+                    }
+                } catch (e) {
+                    console.error('Error loading stats:', e);
+                }
+                
+                return {
+                    totalMatches: 0,
+                    whiteWins: 0,
+                    blackWins: 0,
+                    draws: 0,
+                    totalStartTime: Date.now(),
+                    matches: []
+                };
+            }
+            
+            saveStats() {
+                try {
+                    localStorage.setItem('chessStats', JSON.stringify(this.stats));
+                } catch (e) {
+                    console.error('Error saving stats:', e);
+                }
+            }
+            
+            initBoard() {
+                const board = document.getElementById('chessboard');
+                board.innerHTML = '';
+                
+                const pieces = {
+                    'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+                    'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙'
+                };
+                
+                for (let row = 0; row < 8; row++) {
+                    for (let col = 0; col < 8; col++) {
+                        const square = document.createElement('div');
+                        square.className = `square ${(row + col) % 2 === 0 ? 'light' : 'dark'}`;
+                        square.id = `sq-${row}-${col}`;
+                        
+                        const piece = this.engine.board[row][col];
+                        if (piece !== ' ') {
+                            square.textContent = pieces[piece];
+                        }
+                        
+                        board.appendChild(square);
+                    }
+                }
+            }
+            
+            updateBoard() {
+                const pieces = {
+                    'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚', 'p': '♟',
+                    'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔', 'P': '♙'
+                };
+                
+                document.querySelectorAll('.square').forEach(sq => {
+                    sq.classList.remove('last-move');
+                });
+                
+                for (let row = 0; row < 8; row++) {
+                    for (let col = 0; col < 8; col++) {
+                        const square = document.getElementById(`sq-${row}-${col}`);
+                        const piece = this.engine.board[row][col];
+                        square.textContent = piece !== ' ' ? pieces[piece] : '';
+                    }
+                }
+                
+                if (this.lastMove) {
+                    const [fromRow, fromCol] = this.lastMove.from;
+                    const [toRow, toCol] = this.lastMove.to;
+                    const fromSq = document.getElementById(`sq-${fromRow}-${fromCol}`);
+                    const toSq = document.getElementById(`sq-${toRow}-${toCol}`);
+                    if (fromSq) fromSq.classList.add('last-move');
+                    if (toSq) toSq.classList.add('last-move');
+                }
+            }
+            
+            updateUI() {
+                document.getElementById('totalMatches').textContent = this.stats.totalMatches;
+                document.getElementById('whiteWins').textContent = this.stats.whiteWins;
+                document.getElementById('blackWins').textContent = this.stats.blackWins;
+                document.getElementById('draws').textContent = this.stats.draws;
+                
+                const matchElapsed = Math.floor((Date.now() - this.matchStartTime) / 1000);
+                document.getElementById('matchTime').textContent = `${matchElapsed}s`;
+                
+                const totalElapsed = Math.floor((Date.now() - this.totalStartTime) / 1000);
+                const hours = Math.floor(totalElapsed / 3600);
+                const minutes = Math.floor((totalElapsed % 3600) / 60);
+                const seconds = totalElapsed % 60;
+                document.getElementById('totalTime').textContent = 
+                    hours > 0 ? `${hours}h ${minutes}m` : 
+                    minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+                
+                if (this.lastMoveTime > 0) {
+                    document.getElementById('moveTime').textContent = 
+                        `Last move: ${this.lastMoveTime}ms`;
+                }
+            }
+            
+            async startGame() {
+                while (true) {
+                    await this.playGame();
+                    await this.delay(2000);
+                }
+            }
+            
+            async playGame() {
+                this.engine = new ChessEngine();
+                this.matchStartTime = Date.now();
+                this.lastMove = null;
+                this.initBoard();
+                
+                const moveTimes = [];
+                let resigned = false;
+                let resignedBy = null;
+                
+                while (!this.engine.isGameOver() && !resigned) {
+                    const currentAI = this.engine.currentPlayer === 'white' ? this.whiteAI : this.blackAI;
+                    const aiName = this.engine.currentPlayer === 'white' ? 'WhiteAI' : 'BlackAI';
+                    
+                    document.getElementById('status').textContent = `${aiName} thinking...`;
+                    this.updateUI();
+                    
+                    await this.delay(100);
+                    
+                    const moveStart = Date.now();
+                    const move = currentAI.getBestMove(this.engine);
+                    const moveTime = Date.now() - moveStart;
+                    
+                    this.lastMoveTime = moveTime;
+                    moveTimes.push(moveTime);
+                    
+                    if (move === 'resign') {
+                        resigned = true;
+                        resignedBy = this.engine.currentPlayer;
+                        document.getElementById('status').textContent = `${aiName} resigned!`;
+                        break;
+                    }
+                    
+                    if (!move) break;
+                    
+                    this.lastMove = move;
+                    this.engine.makeMove(move);
+                    this.updateBoard();
+                    this.updateUI();
+                    
+                    await this.delay(50);
+                }
+                
+                let result;
+                if (resigned) {
+                    result = resignedBy === 'white' ? 'black' : 'white';
+                    document.getElementById('status').textContent = 
+                        `${resignedBy === 'white' ? 'BlackAI' : 'WhiteAI'} wins by resignation!`;
+                } else if (this.engine.isCheckmate()) {
+                    result = this.engine.getGameResult();
+                    document.getElementById('status').textContent = 
+                        `Checkmate! ${result === 'white' ? 'WhiteAI' : 'BlackAI'} wins!`;
+                } else if (this.engine.isStalemate()) {
+                    result = 'draw';
+                    document.getElementById('status').textContent = 'Stalemate! Draw.';
+                } else if (this.engine.isDraw()) {
+                    result = 'draw';
+                    document.getElementById('status').textContent = 'Draw by rules.';
+                } else {
+                    result = 'draw';
+                    document.getElementById('status').textContent = 'Game ended.';
+                }
+                
+                this.stats.totalMatches++;
+                if (result === 'white') {
+                    this.stats.whiteWins++;
+                } else if (result === 'black') {
+                    this.stats.blackWins++;
+                } else {
+                    this.stats.draws++;
+                }
+                
+                const matchData = {
+                    matchNumber: this.stats.totalMatches,
+                    result: result,
+                    moves: this.engine.moveHistory.length,
+                    duration: Date.now() - this.matchStartTime,
+                    avgMoveTime: moveTimes.length > 0 ? moveTimes.reduce((a, b) => a + b, 0) / moveTimes.length : 0,
+                    resigned: resigned,
+                    timestamp: new Date().toISOString()
+                };
+                
+                this.stats.matches.push(matchData);
+                
+                if (this.stats.matches.length > 100) {
+                    this.stats.matches.shift();
+                }
+                
+                this.saveStats();
+                
+                this.whiteAI.updateFromGameResult(result);
+                this.blackAI.updateFromGameResult(result);
+                
+                this.updateUI();
+                
+                this.savePGN(matchData);
+            }
+            
+            savePGN(matchData) {
+                try {
+                    const pgn = this.generatePGN(matchData);
+                    const pgnHistory = JSON.parse(localStorage.getItem('pgnHistory') || '[]');
+                    pgnHistory.push(pgn);
+                    
+                    if (pgnHistory.length > 50) {
+                        pgnHistory.shift();
+                    }
+                    
+                    localStorage.setItem('pgnHistory', JSON.stringify(pgnHistory));
+                } catch (e) {
+                    console.error('Error saving PGN:', e);
+                }
+            }
+            
+            generatePGN(matchData) {
+                let pgn = `[Event "AI Battle"]\n`;
+                pgn += `[Date "${new Date().toISOString().split('T')[0]}"]\n`;
+                pgn += `[White "WhiteAI"]\n`;
+                pgn += `[Black "BlackAI"]\n`;
+                pgn += `[Result "${matchData.result === 'white' ? '1-0' : matchData.result === 'black' ? '0-1' : '1/2-1/2'}"]\n\n`;
+                
+                const moves = this.engine.moveHistory;
+                let moveText = '';
+                
+                for (let i = 0; i < moves.length; i++) {
+                    if (i % 2 === 0) {
+                        moveText += `${Math.floor(i / 2) + 1}. `;
+                    }
+                    
+                    const move = moves[i].move;
+                    const [fromRow, fromCol] = move.from;
+                    const [toRow, toCol] = move.to;
+                    const piece = moves[i].piece;
+                    
+                    const fromSquare = String.fromCharCode(97 + fromCol) + (8 - fromRow);
+                    const toSquare = String.fromCharCode(97 + toCol) + (8 - toRow);
+                    
+                    moveText += `${piece.toUpperCase() === 'P' ? '' : piece.toUpperCase()}${fromSquare}${toSquare} `;
+                }
+                
+                pgn += moveText;
+                pgn += `\n${matchData.result === 'white' ? '1-0' : matchData.result === 'black' ? '0-1' : '1/2-1/2'}`;
+                
+                return pgn;
+            }
+            
+            delay(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+        }
+        
+        // ============================================
+        // START APPLICATION
+        // ============================================
+        
+        let game;
+        
+        window.addEventListener('DOMContentLoaded', () => {
+            try {
+                game = new GameController();
+                
+                setInterval(() => {
+                    if (game) {
+                        game.updateUI();
+                    }
+                }, 1000);
+            } catch (e) {
+                console.error('Error starting game:', e);
+                document.getElementById('status').textContent = 'Error: ' + e.message;
+            }
+        });
+    </script>
+</body>
+</html>
